@@ -246,8 +246,11 @@ export function buildReason(p: PlaceRow, distanceMi: number, cuisine?: string): 
 
 export function mapsUrl(p: PlaceRow): string {
   // Key-free universal Maps URL — Google: "You don't need a Google API key to use Maps URLs."
+  // Roughly half of OSM restaurant nodes carry no address. Searching a bare name
+  // ("Rio") can land anywhere in the country, so fall back to anchoring the
+  // search on the node's coordinates.
   const addr = formatAddress(p);
-  const q = addr ? `${p.name} ${addr}` : `${p.name}`;
+  const q = addr ? `${p.name} ${addr}` : `${p.name} ${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
 
@@ -255,6 +258,7 @@ export function mapsUrl(p: PlaceRow): string {
 export function appleMapsUrl(p: PlaceRow): string {
   const addr = formatAddress(p);
   const q = addr ? `${p.name} ${addr}` : p.name;
+  // sll centres the search, so Apple Maps resolves a bare name to the right place.
   return `https://maps.apple.com/?q=${encodeURIComponent(q)}&sll=${p.lat},${p.lon}`;
 }
 
