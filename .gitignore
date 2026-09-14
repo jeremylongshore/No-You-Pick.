@@ -42,3 +42,9 @@ functions/node_modules/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Backend build + runtime state
+server/node_modules/
+server/dist/
+server/data/
+server/public/

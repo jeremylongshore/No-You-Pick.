@@ -4,216 +4,176 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**No, YOU Pick!** — AI-powered restaurant picker using Google Vertex AI Gemini 2.5 Flash to suggest 3 random restaurants based on location, cuisine, and radius. Full-stack: web (React/Vite), mobile (React Native/Expo), backend (Cloud Run/Node.js).
+**No, YOU Pick!** — a restaurant picker. You give it a location, a cuisine and a radius; it gives
+you three real restaurants so your group stops arguing. Live at
+**https://noupick.intentsolutions.io**, self-hosted on the Contabo VPS.
+
+## History you need, or you will rebuild the wrong thing
+
+This app was originally **100% Google Cloud** — Firebase Hosting, Cloud Run, Vertex AI Gemini with
+Google Search grounding, Artifact Registry. **That estate was permanently torn down 2026-07-09.**
+Both the web app and the API returned 404 for five months. It was re-platformed onto the VPS on
+2026-09-14.
+
+Three things about the old design that must not come back:
+
+1. **The LLM was the search engine.** Gemini was prompted to "act as a restaurant picker engine"
+   and emit `Name:/Cuisine:/Address:/Rating:/Status:` blocks as free text, parsed by regex. It
+   could and did invent restaurants. **Facts now come from a place-data provider; no model is in
+   the discovery path.**
+2. **`Rating` and `Status: Open/Closed` were fabricated** — fields a language model was told to
+   produce, with no source of record, rendered as if they were facts. **Both are deleted.** The
+   card shows computed distance, and a closing time only when `opening_hours` actually supports one.
+3. **Randomness was a prompt instruction** (`Session ID: <random int>` plus "do NOT pick the top
+   rated result"). Models are mode-seeking; this did nearly nothing. **Randomness is now a seeded
+   permutation in code.**
+
+**Do not re-enable GCP for this project.** No Firebase, no Cloud Run, no Vertex, and no Google Maps
+Platform — Places/Geocoding require a billing-enabled Cloud project. Directions links do **not**:
+Google states "You don't need a Google API key to use Maps URLs."
 
 ## Architecture
 
 ```
 noupick/
-├── App.tsx, index.tsx           # Web app entry (React 19 + Vite)
-├── components/                  # UI components (6 files)
-│   ├── Button.tsx               # Variants: primary, secondary, outline, hero
-│   ├── Card.tsx                 # Restaurant card — rating, directions, pick count, share
-│   ├── LoadingScreen.tsx        # Animated mascot with rotating messages
-│   ├── Mascot.tsx               # SVG fox with expressions (happy, thinking, sad, surprised)
-│   ├── ShareTicket.tsx          # Ticket-style share preview for restaurants
-│   └── SlotMachine.tsx          # 3-column slot animation with confetti reveal
-├── services/                    # Frontend services
-│   ├── geminiService.ts         # Cloud Run API client (POST /api/restaurants)
-│   ├── restaurantService.ts     # Supabase pick counting (get/increment)
-│   └── supabaseClient.ts        # Supabase client init from env vars
-├── functions/                   # Backend API (Cloud Run)
-│   ├── src/
-│   │   ├── index.ts             # Firebase Functions entry point
-│   │   └── cloudrun.ts          # Cloud Run Express entry point (production)
-│   └── Dockerfile               # Multi-stage Alpine, runs cloudrun.js as non-root
-└── pablo-mobile/                # React Native mobile app (Expo SDK 54)
-    ├── App.tsx                  # Mobile entry point
-    ├── services/api.ts          # Mobile API client
-    ├── app.json                 # Expo config (com.pabsai.noyoupick)
-    └── eas.json                 # EAS build profiles (dev/preview/production)
+├── server/                   # The backend. One Node service, serves API + web app.
+│   └── src/
+│       ├── index.ts          # Express: routes, rate limit, static + SPA fallback
+│       ├── geo.ts            # Nominatim geocoding, cached, 1 req/s serialized
+│       ├── places.ts         # Overpass POI queries, mirror failover, reason text
+│       ├── pick.ts           # Seeded shuffle + category stratification
+│       ├── db.ts             # node:sqlite — cache + pick counts
+│       └── types.ts
+├── App.tsx, index.tsx        # Web app entry (React 19 + Vite)
+├── components/               # Button, Card, LoadingScreen, Mascot, ShareTicket, SlotMachine
+├── services/pickService.ts   # The only API client. No parsing happens here.
+└── pablo-mobile/             # React Native / Expo app — NOT yet ported (see Status)
 ```
 
-### Data Flow
+### Request flow
 
 ```
-User → Web/Mobile → Cloud Run (/api/restaurants) → Vertex AI Gemini 2.5 Flash → Parse → Response
-                                                     ↓
-                                              Grounding chunks → Google Maps links
+location string
+  -> geocode (Nominatim, cached 90d)
+  -> candidate pool (Overpass, cached 24h by ~0.01deg tile)
+  -> seeded shuffle + stratify by cuisine, walked by a cursor
+  -> 3 restaurants + key-free maps deep links
 ```
 
-### Dual Backend Entry Points
+**No LLM call is made at request time.** Reason text is templated from fields we actually hold.
 
-- `functions/src/index.ts` — Firebase Functions (v2 `onRequest` handler). Used when deploying via `firebase deploy --only functions`.
-- `functions/src/cloudrun.ts` — Express 5 server for Cloud Run. **This is the production entry point.** Dockerfile CMD: `node lib/cloudrun.js`.
+### Two invariants
 
-Both implement the same endpoints, CORS, and rate limiting. They differ only in the hosting wrapper.
+**Parsing happens once, on the server.** The old code parsed the model's text on the server
+*and again* in the browser, using a `groundingChunks` field the server never sent — so every map
+link silently fell back to a search URL. The client now renders `restaurants` as given. Never add a
+second parser.
 
-### Gemini Prompt Strategy
+**Identity is `id`, never the display name.** Pick counts key on the stable place id
+(`osm:node/123`). Keying on a name merges every "Joe's Pizza" in the country and cannot be migrated
+later, because the information was never captured.
 
-- Model: `gemini-2.5-flash` in `us-central1`
-- Random seed per request to avoid repetitive picks
-- `CRITICAL INSTRUCTION` block forces variety (not just top-rated/closest)
-- Response format: `---SEPARATOR---` delimited blocks with Name/Cuisine/Address/Rating/Status/Reason
-- `NO_MATCHES_FOUND` sentinel for zero-result cuisine filters
-- Grounding metadata chunks provide Google Maps URIs; falls back to search URL
+## Development
 
-### Supabase Integration
-
-- Table: `restaurants` with `name` and `pick_count` columns
-- `getRestaurantPickCount(name)` → returns `number | null` (null when unavailable)
-- `incrementRestaurantPick(name)` → upsert with increment
-- Used for "Community Intent" display on restaurant cards
-- **Not** the primary data store — Vertex AI is the main data flow
-
-## Development Commands
-
-### Web App (root)
 ```bash
-npm run dev              # Vite dev server on http://localhost:3000
-npm run build            # Production build to dist/
-npm run preview          # Preview production build
-npm run typecheck        # TypeScript check (tsc --noEmit)
-npm run emulators        # Firebase emulators (UI:4000, hosting:5000, functions:5001)
+npm install && npm run dev        # web app, Vite on :3000
+npm run typecheck                 # tsc --noEmit
+npm run build                     # -> dist/
+
+cd server && npm install
+npx tsc && node dist/index.js     # API + static on :8099
 ```
 
-### Backend (functions/)
-```bash
-cd functions
-npm run build            # Compile TypeScript to lib/
-npm run build:watch      # Watch mode
-npm run serve            # Firebase emulator
-npm run logs             # View function logs
-npm run lint             # ESLint
-```
-
-### Mobile App (pablo-mobile/)
-```bash
-cd pablo-mobile
-npx expo start           # Expo dev server
-npx expo start --ios     # iOS simulator
-npx expo start --android # Android emulator
-npm run test             # Jest tests
-npm run typecheck        # TypeScript check
-```
+The dev server expects `VITE_API_BASE_URL` to point at a running backend. In production it is empty
+— the same origin serves both.
 
 ## Deployment
 
-### Web App (Firebase Hosting)
+Live host: `intentsolutions` (167.86.106.29), systemd unit **`noupick.service`** on **port 8094**,
+behind Caddy at `noupick.intentsolutions.io`.
+
 ```bash
-npm run build && firebase deploy --only hosting --project noupick-prod
+npm run build && rm -rf server/public && cp -r dist server/public
+cd server && npx tsc
+rsync -az --delete server/dist server/public server/package.json server/package-lock.json \
+  intentsolutions:/tmp/noupick-deploy/
+ssh intentsolutions 'sudo rsync -a --delete --exclude data /tmp/noupick-deploy/ /srv/noupick/ \
+  && cd /srv/noupick && sudo -u intentsolutions npm ci --omit=dev \
+  && sudo systemctl restart noupick'
 ```
 
-### Backend API (Cloud Run)
-```bash
-cd functions && npm run build
-docker build -t us-central1-docker.pkg.dev/noupick-prod/noupick/api:latest .
-docker push us-central1-docker.pkg.dev/noupick-prod/noupick/api:latest
-gcloud run deploy noupick-api \
-  --image us-central1-docker.pkg.dev/noupick-prod/noupick/api:latest \
-  --region us-central1 --project noupick-prod --allow-unauthenticated \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=noupick-prod
-```
+**Caddy**: always `sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` before
+`sudo systemctl reload caddy` (reload, never restart — it is live for every other site on the box).
 
-### Mobile App (EAS Build)
-```bash
-cd pablo-mobile
-npx eas build --platform android --profile preview   # Test APK
-npx eas build --platform ios --profile production     # App Store
-npx eas submit --platform ios                         # Submit to App Store
-```
+**SQLite lives at `/srv/noupick/data/`** and is the only writable path in the unit
+(`ProtectSystem=strict`). Deleting it loses pick counts and the cache; nothing else.
 
-## API Endpoints
+## API
 
-| Method | Path | Purpose | Rate Limited |
-|--------|------|---------|-------------|
-| POST | /api/restaurants | Get 3 restaurant recommendations | Yes (10/min/IP) |
-| GET | /health | Health check | No |
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/restaurants` | 3 picks. Body: `locationQuery` or `coords`, `cuisine`, `radius`, `sessionId`, `cursor` |
+| POST | `/api/pick` | Increment a pick count. Body: `placeId`, `name` |
+| GET | `/health` | Liveness |
 
-**Request:**
-```json
-{
-  "locationQuery": "Los Angeles, CA",
-  "cuisine": "Mexican",
-  "radius": "10",
-  "excludeNames": ["Taco Bell"]
-}
-```
+Rate limit 40/min/IP, bounded map swept on an interval. Response carries `poolSize`, `cursor` and
+`exhausted` so the UI can say "you have seen everything within 5 miles" instead of repeating.
 
-**Rate limit headers:** `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`. Returns 429 with `retryAfter` when exceeded. In-memory Map store (single instance — use Redis for scale).
+### How spin-again works
 
-### CORS Allowed Origins
-
-`http://localhost:3000`, `http://localhost:5000`, `http://localhost:5173`, `/\.web\.app$/`, `/\.firebaseapp\.com$/`, `/noupick.*\.web\.app$/`
-
-## Environment Variables
-
-**Frontend (.env):**
-- `VITE_API_BASE_URL` — Cloud Run or emulator URL (auto-detects prod/dev if unset)
-- `VITE_SUPABASE_URL` — Supabase project URL
-- `VITE_SUPABASE_ANON_KEY` — Supabase anonymous key
-
-**Backend (functions/):**
-- `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) — GCP project ID
-- `PORT` — Server port (defaults to 8080)
-- `NODE_ENV` — Set to `production` in Docker
-
-## Production URLs
-
-- **Web App:** https://noupick-prod.web.app
-- **API:** https://noupick-api-246498703732.us-central1.run.app
-- **Health:** https://noupick-api-246498703732.us-central1.run.app/health
-- **GCP Project:** `noupick-prod` | **Region:** `us-central1`
-- **Artifact Registry:** `us-central1-docker.pkg.dev/noupick-prod/noupick/api`
-- **Mobile Bundle ID:** `com.pabsai.noyoupick` (iOS + Android)
-
-## Firebase Config (firebase.json)
-
-- Hosting serves `dist/` with SPA fallback (`** → /index.html`)
-- `/api/**` rewrites to Cloud Run service `noupick-api` in `us-central1`
-- Cache: immutable assets get `max-age=31536000`, index.html gets `no-cache`
-
-## Local Storage Keys
-
-- `food_roulette_favorites` — Saved restaurants JSON
-- `food_roulette_radius` — Last selected radius
-- `food_roulette_location` — Last searched location
-- `food_roulette_picks` — Pick tracking (prevents re-voting)
-
-## Key Architecture Decisions
-
-1. **No client-side API keys** — All Vertex AI calls proxied through Cloud Run with ADC authentication
-2. **Rate limiting** — 10 requests/minute per IP, in-memory Map (single instance only)
-3. **CORS whitelist** — Only approved origins, regex patterns for Firebase subdomains
-4. **Dual entry points** — `index.ts` (Firebase Functions) vs `cloudrun.ts` (Cloud Run). Dockerfile uses cloudrun.ts.
-5. **Supabase is optional** — Pick counts return null when unavailable; UI hides the section
-6. **Tailwind via CDN** — Loaded via `<script>` tag in index.html, not an npm dependency
-7. **Gemini prompt randomization** — Random seed per request + explicit instructions to avoid top-rated/closest bias
-
-## Tech Stack
-
-| Component | Technology | Version |
-|-----------|------------|---------|
-| Web Frontend | React + Vite + TypeScript | 19.2 / 6.2 / 5.8 |
-| Mobile | React Native + Expo | 0.81.5 / SDK 54 |
-| Backend | Node.js + Express | 20 / 5.2 |
-| AI | Vertex AI Gemini 2.5 Flash | `gemini-2.5-flash` |
-| Database | Supabase (PostgreSQL) | Community pick counts only |
-| Hosting | Firebase Hosting (web) | `noupick-prod` |
-| Compute | Cloud Run (API) | `us-central1` |
-| Container | Docker (Alpine multi-stage) | Non-root, port 8080 |
-| CI/CD | Manual deploy | No automated pipeline |
+The server seeds a permutation from `sessionId + place + cuisine + radius` and the client walks it
+with `cursor`. Same seed always yields the same order, so paging through it **cannot repeat until
+the pool is exhausted**. This replaced an `excludeNames` array that grew by three names per spin and
+was fed back into the prompt.
 
 ## Gotchas
 
-- **Pick counts return null when Supabase is unavailable** — `getRestaurantPickCount()` returns `null` when env vars are missing or connection fails. UI hides "Community Intent" section when null. Previously generated fake counts (3000-11999) — removed to avoid misleading users.
-- **Dual entry points** — Dockerfile uses `cloudrun.ts`, not `index.ts`. If you change API logic, update both files.
-- **Cloud Run platform rate limiting** — `/health` may return 429 from Cloud Run's platform throttle (not app code). Transient — resolves when instance scales up.
-- **Tailwind not in package.json** — Loaded via CDN script tag. Don't look for it in node_modules.
-- **Cuisine options** — 16 types defined in `App.tsx` CUISINE_OPTIONS: Any, Pizza, Mexican, Sushi, Burgers, Asian, Italian, Steak, Veggie, Vegan, Healthy, Coffee, Dessert, Chicken, Indian, Thai. Users can also type custom cuisine.
-- **Radius options** — 4 discrete values (1, 5, 15, 30 miles), not a continuous slider.
-- **Billing required** — GCP billing must be enabled on `noupick-prod` for Cloud Run + Artifact Registry + Vertex AI to function.
+- **Public Overpass throttles, and lies about it.** Busy mirrors return **HTTP 200 with an empty
+  `elements` array** and an error in a `remark` field. Treating that as "no restaurants here" makes
+  a whole city look empty. `places.ts` detects `remark`, rotates mirrors in random order, retries
+  three times, and **never caches an empty pool**. This is a band-aid — the real fix is bead
+  `nup-26g.5`, moving to a local Overture Places table.
+- **Nominatim requires a real User-Agent** with contact info and asks for ≤1 req/s. `geo.ts`
+  serializes calls and caches for 90 days. A generic UA gets a 403.
+- **`node:sqlite` is used, not `better-sqlite3`** — no native build, no blocked install scripts. It
+  prints an experimental warning on boot; that is expected.
+- **OSM `cuisine` is multi-valued** (`greek;mexican`). When a filter is active the card shows the
+  value that *matched*, so a Mexican search does not label a place "Greek".
+- **Hours are only claimed when unambiguous.** Multi-rule specs vary by day and we do not evaluate
+  day-of-week, so `hoursHint()` stays silent rather than assert a wrong closing time.
+- **Tailwind comes from a CDN `<script>` tag** in `index.html`, not npm. Don't look in node_modules.
+- **Cuisine options** — 16 in `App.tsx` CUISINE_OPTIONS; users can also type a custom one, which is
+  slugged into an OSM cuisine regex.
+- **Radius options** — 4 discrete values (1, 5, 15, 30 miles).
 
+## Status
+
+| Piece | State |
+|---|---|
+| Web app + API | **Live** at noupick.intentsolutions.io |
+| Place data | Public Overpass — works, but throttles. Overture migration is `nup-26g.5`. |
+| LLM | Out of the request path. Returns later as a batch copywriter (`nup-26g.7`). |
+| Mobile (`pablo-mobile/`) | **Not ported.** Still points at the dead Cloud Run URL. 450 lines, no geolocation/mascot/slot-machine/share. Targets API 35, below Google Play's required 36. Tracked as `nup-26g.6`. |
+| Tests | One file, in `pablo-mobile/`. No CI. |
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Web | React 19 + Vite 6 + TypeScript 5.8 |
+| Backend | Node 22 + Express 4, `node:sqlite` |
+| Place data | OpenStreetMap via Overpass; Nominatim geocoding |
+| Maps | Key-free deep links (Google Maps URLs, maps.apple.com) |
+| Host | Contabo VPS, systemd + Caddy |
+| Mobile | React Native + Expo SDK 54 (not ported) |
+
+## Attribution
+
+Place data is © OpenStreetMap contributors, ODbL. The API returns an `attribution` string on every
+response and the UI must display it. **Note:** rendering OSM results is a Produced Work
+(attribution only), but **storing a filtered derived table makes it a Derivative Database and
+share-alike attaches** — which is precisely why `nup-26g.5` targets Overture Places
+(CDLA-Permissive, no copyleft) rather than bulk-loading OSM.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
