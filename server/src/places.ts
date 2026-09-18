@@ -1,16 +1,21 @@
 import { cacheGet, cacheSet } from './db';
 import { haversineMi } from './geo';
 import { PlaceRow } from './types';
+import { queryLocal, isLocalAvailable, localSupportsCuisine } from './localPlaces';
 
 const UA = process.env.NOUPICK_USER_AGENT
   || 'noupick/2.0 (https://noupick.intentsolutions.io; jeremy@intentsolutions.io)';
 // Public Overpass instances throttle hard and 504 under load. Rotate across mirrors.
 const OVERPASS_ENDPOINTS = (process.env.OVERPASS_URLS ||
   [
+    // Verified to serve GLOBAL data. Do not add regional instances here:
+    // overpass.osm.ch holds Switzerland only and answers a US query with
+    // HTTP 200 and zero elements, which is indistinguishable from "no
+    // restaurants here" and silently poisoned the pool. kumi.systems and
+    // osm.jp were unreachable from this host when last checked (2026-09-18).
     'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
-    'https://overpass.osm.ch/api/interpreter',
+    'https://overpass.monicz.dev/api/interpreter',
   ].join(',')
 ).split(',').map(s => s.trim()).filter(Boolean);
 const POOL_TTL = 24 * 60 * 60 * 1000;
@@ -55,7 +60,7 @@ function buildQuery(lat: number, lon: number, radiusM: number, cuisine: string):
   const parts = amenitiesFor(cuisine)
     .map(a => `node["amenity"="${a}"]${filter}(around:${radiusM},${lat},${lon});`)
     .join('\n  ');
-  return `[out:json][timeout:15];\n(\n  ${parts}\n);\nout body 200;`;
+  return `[out:json][timeout:30];\n(\n  ${parts}\n);\nout body 200;`;
 }
 
 function tileKey(lat: number, lon: number, radiusMi: number, cuisine: string): string {
@@ -66,7 +71,7 @@ function tileKey(lat: number, lon: number, radiusMi: number, cuisine: string): s
 }
 
 /** Try each mirror in turn; a 429/504 from a busy instance is normal, not fatal. */
-async function queryOverpass(body: string, hardStop = Date.now() + 16_000): Promise<{ elements?: OverpassEl[] }> {
+async function queryOverpass(body: string, hardStop = Date.now() + 48_000): Promise<{ elements?: OverpassEl[] }> {
   let lastErr: unknown = null;
   // Randomize mirror order so concurrent requests spread across instances
   // instead of all hammering the first one and tripping its rate limiter.
@@ -78,7 +83,7 @@ async function queryOverpass(body: string, hardStop = Date.now() + 16_000): Prom
     if (Date.now() > hardStop) break;
     try {
       const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 8_000);
+      const timer = setTimeout(() => ctl.abort(), 20_000);
       try {
         const res = await fetch(url, {
           method: 'POST',
@@ -110,7 +115,7 @@ async function queryOverpass(body: string, hardStop = Date.now() + 16_000): Prom
 }
 
 /** Two passes over the mirror list — a busy instance often recovers on retry. */
-const POOL_DEADLINE_MS = 16_000;
+const POOL_DEADLINE_MS = 48_000;
 
 async function queryOverpassWithRetry(body: string): Promise<{ elements?: OverpassEl[] }> {
   let lastErr: unknown = null;
@@ -145,6 +150,16 @@ interface OverpassEl {
 export async function fetchPool(
   lat: number, lon: number, radiusMi: number, cuisine: string
 ): Promise<PlaceRow[]> {
+  // Local Overture data is authoritative when present: no network, no rate
+  // limit, no mirror that answers "throttled" with an empty result set.
+  if (isLocalAvailable() && localSupportsCuisine(cuisine)) {
+    const local = queryLocal(lat, lon, radiusMi, cuisine);
+    if (local && local.length > 0) return local;
+    // An empty local result for a supported cuisine is a real answer for a
+    // rural area, but Overpass sometimes has coverage Overture lacks, so try it
+    // before telling the user there is nothing here.
+  }
+
   const key = tileKey(lat, lon, radiusMi, cuisine);
   const hit = cacheGet<PlaceRow[]>(key, POOL_TTL);
   if (hit) return hit;
@@ -193,8 +208,21 @@ function titleCase(s: string): string {
  * something, surface the value that actually matched so the card doesn't say
  * "Greek" on a search for Mexican.
  */
+const CATEGORY_LABELS: Record<string, string> = {
+  fast_food: 'Fast Food', coffee_shop: 'Coffee', ice_cream_shop: 'Ice Cream',
+  donut_shop: 'Donuts', sandwich_shop: 'Sandwiches', dessert_shop: 'Dessert',
+  juice_and_smoothie_bar: 'Smoothies', food_court: 'Food Court',
+  vegan_and_vegetarian_restaurant: 'Veggie', barbecue_restaurant: 'Barbecue',
+  breakfast_and_brunch_restaurant: 'Breakfast', food_truck: 'Food Truck',
+  restaurant: 'Restaurant', steakhouse: 'Steak', bakery: 'Bakery', deli: 'Deli',
+  bar: 'Bar', pub: 'Pub', cafe: 'Cafe', diner: 'Diner', buffet: 'Buffet',
+};
+
 export function prettyCuisine(tag: string | null, cuisine?: string): string {
   if (!tag) return 'Restaurant';
+  // Overture ships basic_category values like "mexican_restaurant".
+  if (CATEGORY_LABELS[tag]) return CATEGORY_LABELS[tag];
+  if (tag.endsWith('_restaurant')) return titleCase(tag.replace(/_restaurant$/, ''));
   const values = tag.split(/[;,]/).map(v => v.trim()).filter(Boolean);
   if (!values.length) return 'Restaurant';
   const rx = cuisine ? cuisineRegex(cuisine) : null;

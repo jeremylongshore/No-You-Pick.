@@ -4,6 +4,7 @@ import { geocode, haversineMi } from './geo';
 import { fetchPool, buildReason, mapsUrl, appleMapsUrl, prettyCuisine, formatAddress } from './places';
 import { seededShuffle, stratify, hashSeed } from './pick';
 import { pickCounts, incrementPick, sweepCache } from './db';
+import { initLocalPlaces, isLocalAvailable, localRowCount } from './localPlaces';
 import { PickRequest, PickResponse, Restaurant } from './types';
 
 const PORT = parseInt(process.env.PORT || '8099', 10);
@@ -48,7 +49,13 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
 });
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'healthy', version: '2.0.0', ts: new Date().toISOString() });
+  res.json({
+    status: 'healthy',
+    version: '2.1.0',
+    placeSource: isLocalAvailable() ? 'overture-local' : 'overpass-fallback',
+    localPlaces: localRowCount(),
+    ts: new Date().toISOString(),
+  });
 });
 
 app.post('/api/restaurants', async (req: Request, res: Response) => {
@@ -133,4 +140,5 @@ const PUBLIC_DIR = process.env.NOUPICK_PUBLIC || path.join(__dirname, '..', 'pub
 app.use(express.static(PUBLIC_DIR, { maxAge: '1h', index: 'index.html' }));
 app.get('*', (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
+initLocalPlaces();
 app.listen(PORT, () => console.log(`noupick api+web on :${PORT}`));

@@ -1,13 +1,14 @@
 {
   "name": "noupick-server",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "commonjs",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc && node dist/index.js"
+    "dev": "tsc && node dist/index.js",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "express": "^4.21.2"
