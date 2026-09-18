@@ -153,8 +153,8 @@ was fed back into the prompt.
 | Web app + API | **Live** at noupick.intentsolutions.io |
 | Place data | Public Overpass — works, but throttles. Overture migration is `nup-26g.5`. |
 | LLM | Out of the request path. Returns later as a batch copywriter (`nup-26g.7`). |
-| Mobile (`pablo-mobile/`) | **Not ported.** Still points at the dead Cloud Run URL. 450 lines, no geolocation/mascot/slot-machine/share. Targets API 35, below Google Play's required 36. Tracked as `nup-26g.6`. |
-| Tests | One file, in `pablo-mobile/`. No CI. |
+| Mobile (`pablo-mobile/`) | **Ported and building.** Expo SDK 57 / RN 0.86.3, points at the live API, device geolocation + native share + favorites. Bundles for both platforms. Not yet submitted — see Submission below. |
+| Tests | 10 contract tests in `pablo-mobile/__tests__/api.test.ts`. The web app has none. No CI. |
 
 ## Tech Stack
 
@@ -165,7 +165,66 @@ was fed back into the prompt.
 | Place data | OpenStreetMap via Overpass; Nominatim geocoding |
 | Maps | Key-free deep links (Google Maps URLs, maps.apple.com) |
 | Host | Contabo VPS, systemd + Caddy |
-| Mobile | React Native + Expo SDK 54 (not ported) |
+| Mobile | React Native 0.86.3 + Expo SDK 57 |
+
+## Mobile app
+
+`pablo-mobile/` is an Expo (SDK 57) app sharing the same API. It is deliberately **not** a port of
+the web components — it uses native primitives throughout.
+
+```bash
+cd pablo-mobile
+npm install
+npx expo start              # scan the QR with Expo Go on a real device
+npm test                    # 10 contract tests
+npx tsc --noEmit
+npx expo-doctor             # must stay 21/21
+npx expo export --platform android --platform ios --output-dir /tmp/x   # proves the module graph
+```
+
+Override the API host for local work with `EXPO_PUBLIC_API_URL`.
+
+**Device capabilities**, which are also the Apple guideline 4.2 "minimum functionality" defence —
+do not strip these back to a form and a list:
+
+- `expo-location` foreground geolocation (the ◎ button). Background location is explicitly
+  disabled in the config; requesting it triggers a heavyweight review for no benefit.
+- Native share sheet via React Native's `Share`.
+- `expo-haptics` on reveal, pick and spin.
+- Favourites and pick state persisted with AsyncStorage, keyed on the **stable place id**.
+
+### Platform-specific maps behaviour
+
+`geo:` is **not registered on iOS** — Apple only resolves `https://maps.apple.com` links. So
+`openMaps()` sends iOS to `appleMapsUrl` and Android to a `geo:` intent (which lets the user pick
+their own nav app), falling back to the Google Maps URL if neither resolves.
+
+### Submission
+
+`eas.json` has two deliberate placeholders that **must** be filled before `eas submit` will work:
+`ascAppId` and `appleTeamId`. The EAS account owner is `pabs-ai` and the Apple ID is
+`pablo@pabs.ai`, so the login is interactive and not something a session can do unattended.
+
+Android submission needs a **Google Play service-account JSON** at `play-service-account.json`
+(gitignored). The previous config pointed at `google-services.json`, which is a Firebase *client*
+config and the wrong file entirely.
+
+Two 2026 store requirements that bite this app specifically:
+
+1. **Google Play requires target API 36** (since 2026-08-31). SDK 54 targeted 35, which is why the
+   upgrade was mandatory rather than cosmetic.
+2. **Apple guideline 5.1.2(i)** requires an in-app consent modal — not a privacy-policy link — if
+   personal data is shared with a third-party AI service. The app sends location only to our own
+   server and calls no model at request time, so the requirement does not currently apply.
+   **It would start applying the moment an LLM enters the request path** (see `nup-26g.7`, which is
+   deliberately designed as an offline batch job to avoid exactly this).
+
+### Known dependency noise
+
+`npm audit` reports vulnerabilities in `@expo/cli`'s tree (`shell-quote`, `node-forge`,
+`@xmldom/xmldom`, `ws`, …). These are **build-time toolchain only** and never enter the Hermes
+bundle. Do **not** run `npm audit fix` — it downgrades `expo-splash-screen` to the SDK 55 line and
+desynchronises the project. They clear when Expo ships a newer CLI.
 
 ## Attribution
 
