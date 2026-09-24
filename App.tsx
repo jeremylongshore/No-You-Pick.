@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { getRandomRestaurants } from './services/geminiService';
+import { getRandomRestaurants } from './services/pickService';
 import { Restaurant, AppStatus, GeoLocation } from './types';
 import { Button } from './components/Button';
 import { SlotMachine } from './components/SlotMachine';
@@ -64,7 +64,10 @@ export function App() {
   const [selectedCuisine, setSelectedCuisine] = useState('Any');
   const [customCuisine, setCustomCuisine] = useState('');
   const [lastLocation, setLastLocation] = useState<{query: string, coords?: GeoLocation} | null>(null);
-  const [excludeList, setExcludeList] = useState<string[]>([]);
+  // Cursor into the server's seeded permutation. Replaces the old excludeNames
+  // list, which grew by 3 names on every spin and was fed back into the prompt.
+  const [cursor, setCursor] = useState<number>(0);
+  const [exhausted, setExhausted] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [showFavorites, setShowFavorites] = useState(false);
   const [radius, setRadius] = useState('15'); // Default remains 15mi
@@ -187,7 +190,7 @@ export function App() {
     }
   };
 
-  const performSearch = async (query: string, cuisine: string, exclusions: string[], coords?: GeoLocation) => {
+  const performSearch = async (query: string, cuisine: string, fromCursor: number, coords?: GeoLocation) => {
     setStatus(AppStatus.LOADING);
     setIsSpinning(true);
     setError(null);
@@ -200,7 +203,7 @@ export function App() {
     }
 
     try {
-      const result = await getRandomRestaurants(query, cuisine, exclusions, coords, radius);
+      const result = await getRandomRestaurants(query, cuisine, fromCursor, coords, radius);
       
       if (result.restaurants.length === 0) {
         const msg = cuisine && cuisine !== 'Any'
@@ -211,12 +214,14 @@ export function App() {
         setIsSpinning(false);
       } else {
         setRestaurants(result.restaurants);
+        setCursor(result.cursor);
+        setExhausted(result.exhausted);
         // CRITICAL FIX: Trigger the SlotMachine to start its "stopping" sequence
         setIsSpinning(false);
       }
     } catch (err) {
       console.error(err);
-      setError("Something went wrong with the search. Please try again.");
+      setError(err instanceof Error ? err.message : "Something went wrong with the search. Please try again.");
       setStatus(AppStatus.ERROR);
       setIsSpinning(false);
     }
@@ -229,10 +234,11 @@ export function App() {
       locationInputRef.current?.focus();
       return;
     }
-    setExcludeList([]); 
+    setCursor(0);
+    setExhausted(false);
     setLastLocation({ query: effectiveQuery });
     const cuisine = customCuisine.trim() || selectedCuisine || "Any";
-    await performSearch(effectiveQuery, cuisine, [], undefined);
+    await performSearch(effectiveQuery, cuisine, 0, undefined);
   }, [locationInput, selectedCuisine, customCuisine, radius]);
 
   const handleCuisineSelect = (c: string) => {
@@ -250,10 +256,11 @@ export function App() {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
-        setExcludeList([]);
+        setCursor(0);
+        setExhausted(false);
         setLastLocation({ query: "current location", coords });
         const cuisine = customCuisine.trim() || selectedCuisine || "Any";
-        performSearch("current location", cuisine, [], coords);
+        performSearch("current location", cuisine, 0, coords);
         setLocationInput("Current Location");
       },
       (err) => {
@@ -266,11 +273,9 @@ export function App() {
 
   const handleReroll = () => {
     if (lastLocation) {
-      const currentNames = restaurants.map(r => r.name);
-      const newExcludeList = [...excludeList, ...currentNames];
-      setExcludeList(newExcludeList);
+      // Walk further into the same permutation — no repeats until the pool runs out.
       const cuisine = customCuisine.trim() || selectedCuisine || "Any";
-      performSearch(lastLocation.query, cuisine, newExcludeList, lastLocation.coords);
+      performSearch(lastLocation.query, cuisine, cursor, lastLocation.coords);
     }
   };
 
@@ -280,7 +285,8 @@ export function App() {
     setIsSpinning(false);
     setError(null);
     setLastLocation(null);
-    setExcludeList([]);
+    setCursor(0);
+    setExhausted(false);
     setShowFavorites(false);
   };
 

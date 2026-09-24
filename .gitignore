@@ -36,3 +36,15 @@ ui-debug.log
 # Functions build output
 functions/lib/
 functions/node_modules/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+
+# Backend build + runtime state
+server/node_modules/
+server/dist/
+server/data/
+server/public/
