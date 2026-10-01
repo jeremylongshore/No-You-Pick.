@@ -659,6 +659,15 @@ export function App() {
           </>
         )}
       </main>
+      <footer className="mx-auto max-w-3xl px-6 py-8 text-center text-sm leading-relaxed text-slate-700">
+        <p>
+          Built by <a href="https://intentsolutions.io/about/" className="font-bold underline underline-offset-4">Intent Solutions</a>.
+          {" "}Useful products, tested behavior, and practical knowledge belong to the same work.
+        </p>
+        <a href="https://startaitools.com/deployment-thesis/" className="mt-2 inline-flex min-h-11 items-center font-bold underline underline-offset-4">
+          How the work connects
+        </a>
+      </footer>
     </div>
   );
 }
