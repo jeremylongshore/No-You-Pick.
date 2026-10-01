@@ -2,22 +2,21 @@
   "expo": {
     "name": "No, YOU Pick!",
     "slug": "noyoupick",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#1a1a2e"
-    },
+    "scheme": "noyoupick",
+    "primaryColor": "#e94560",
+    "description": "Can't decide where to eat? No, YOU Pick! spins up three real restaurants near you so your group stops arguing. Real places, real addresses, one tap to directions.",
+    "githubUrl": "https://github.com/jeremylongshore/No-You-Pick.",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.pabsai.noyoupick",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "We use your location to find restaurants near you."
+        "NSLocationWhenInUseUsageDescription": "Your location is used to find restaurants near you — for example, showing places within 5 miles of where you are standing right now. It is sent only to our own server to run the search and is never stored or shared.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -26,8 +25,7 @@
         "backgroundColor": "#1a1a2e"
       },
       "package": "com.pabsai.noyoupick",
-      "versionCode": 1,
-      "edgeToEdgeEnabled": true,
+      "versionCode": 2,
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
@@ -38,14 +36,30 @@
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#1a1a2e"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Your location is used to find restaurants near you. Foreground only — the app never tracks you in the background.",
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ]
+    ],
     "extra": {
       "eas": {
         "projectId": "e3e8c2fb-03c9-474c-bd3c-eb1b1a2fbc2b"
       }
     },
-    "owner": "pabs-ai",
-    "description": "AI-powered restaurant picker that decides where to eat when you can't. Let Gemini AI pick your next meal!",
-    "githubUrl": "https://github.com/intent-solutions-io/No-You-Pick.",
-    "primaryColor": "#e94560"
+    "owner": "pabs-ai"
   }
 }

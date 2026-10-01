@@ -37,7 +37,7 @@ export const ShareTicket = forwardRef<HTMLDivElement, ShareTicketProps>(({ resta
         <div className="flex justify-between items-end mb-4">
            <div className="text-left">
               <div className="text-[10px] text-slate-400 font-bold">RATING</div>
-              <div className="text-xl font-bold">⭐ {restaurant.rating}</div>
+              <div className="text-xl font-bold">📍 {restaurant.distanceMi} mi</div>
            </div>
            <div className="text-right">
               <div className="text-[10px] text-slate-400 font-bold">COMMUNITY</div>

@@ -42,3 +42,6 @@ google-services.json
 # generated native folders
 /ios
 /android
+
+# Google Play submit credential — never commit this
+play-service-account.json
